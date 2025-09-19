@@ -15,3 +15,13 @@ def numberThings(numberList, value):
         print(x)
 
 numberThing(number, value)        
+
+
+
+# create a function that will organize our list of numers from 
+# least to greatest 
+unorderList= [23, 600, 4, 91, 22, 49]
+
+unorderList.sort(reverse=True)
+
+print(unorderList)

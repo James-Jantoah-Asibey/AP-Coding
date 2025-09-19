@@ -37,6 +37,17 @@ def thislist():
 
 numberList(10, 30, 1, 6, 99, 45, 29):    
 
+# objects is a contruct for story data and functions
+
+class instaProfile:
+    def __init__(self, username, email, profileImg,pw):
+        self.username = username
+        self.email = email
+        self.profileImg= profileImg
+        self.pw = pw
+        
+
+
 
 
 
