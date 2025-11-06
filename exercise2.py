@@ -1,15 +1,25 @@
+
+
 def pdCheck():
-    print("please enter a number.")
+    print("Please enter a number")
     number = input()
     values = []
-    calculate = 'q'
-    while calculate != 'stop': #whatever is not zero do this
-        values.append(number)
+
+    while number!= 'q':
+        values.append(int(number))
         print(values)
-        print("please enter a number")
+        print("Please enter a number")
         number = input()
     else:
-        print('doing calculations') 
+        print('doing calculation...')
+        total = sum(values)
+        print(total)
 
-pdCheck()           
 
+pdCheck()        
+
+#which team has the best home point differential this season
+'the best home PD is indianan with a 64 PD'
+
+#whihc team has the bes away point differential this season?
+'the best away PD is'
