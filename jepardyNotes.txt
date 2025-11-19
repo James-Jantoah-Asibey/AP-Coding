@@ -1,0 +1,2 @@
+The opterator tht is used to add abnd subrtact is arithmatic
+device= calculator
