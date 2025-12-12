@@ -1,680 +1,681 @@
-import pandas as pd
 import nfl_data_py as nfl
+import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Dict, List, Optional
-from typing import Union, Tuple
+import numpy as np
 
-def get_team_records(year):
+def get_season_totals_by_position(year: int, position: str) -> pd.DataFrame:
+    """
+    Return trimmed full-season stats for all players at a given position.
+
+    Args:
+        year (int): NFL season (e.g., 2024)
+        position (str): Player position ('QB', 'RB', 'WR', 'TE', etc.)
+
+    Returns:
+        pandas.DataFrame: One row per player with core season-total stats.
+    """
+    # Load weekly stats for the season
+    weekly = nfl.import_weekly_data([year])
+
+    pos = position.upper()
+
+    if "position" not in weekly.columns:
+        raise ValueError("Column 'position' not found in weekly data.")
+
+    # Filter to the requested position
+    pos_df = weekly[weekly["position"] == pos].copy()
+    if pos_df.empty:
+        raise ValueError(f"No data found for position '{pos}' in season {year}.")
+
+    # Identify player columns
+    group_cols = ["player_display_name", "player_id", "position", "recent_team"]
+    group_cols = [c for c in group_cols if c in pos_df.columns]
+
+    # Calculate games played per player
+    if "week" in pos_df.columns:
+        games_played = (
+            pos_df.groupby(group_cols)["week"]
+            .nunique()
+            .reset_index(name="games_played")
+        )
+    else:
+        # Fallback if week isn't available
+        games_played = (
+            pos_df.groupby(group_cols)
+            .size()
+            .reset_index(name="games_played")
+        )
+
+    # Numeric columns to sum
+    numeric_cols = pos_df.select_dtypes(include="number").columns.tolist()
+    # Remove fantasy-related columns
+    fantasy_cols = [c for c in numeric_cols if "fantasy" in c.lower()]
+    numeric_cols = [c for c in numeric_cols if c not in fantasy_cols]
+
+    # Group by player and sum
+    season_totals = (
+        pos_df[group_cols + numeric_cols]
+        .groupby(group_cols, as_index=False)[numeric_cols]
+        .sum()
+    )
+
+    # Merge games_played
+    season_totals = season_totals.merge(games_played, on=group_cols, how="left")
+
+    # ---- Position-specific core columns ----
+    core_stats_by_pos = {
+        "QB": [
+            "games_played",
+            "attempts",
+            "completions",
+            "passing_yards",
+            "passing_tds",
+            "interceptions",
+            "rushing_yards",
+            "rushing_tds",
+        ],
+        "RB": [
+            "games_played",
+            "rushing_attempts",
+            "rushing_yards",
+            "rushing_tds",
+            "targets",
+            "receptions",
+            "receiving_yards",
+            "receiving_tds",
+        ],
+        "WR": [
+            "games_played",
+            "targets",
+            "receptions",
+            "receiving_yards",
+            "receiving_tds",
+        ],
+        "TE": [
+            "games_played",
+            "targets",
+            "receptions",
+            "receiving_yards",
+            "receiving_tds",
+        ],
+    }
+
+    # Choose which columns to keep
+    base_cols = group_cols.copy()
+    pos_core = core_stats_by_pos.get(pos, ["games_played"])
+    keep_cols = base_cols + [c for c in pos_core if c in season_totals.columns]
+
+    # Filter to trimmed set of columns
+    season_totals = season_totals[keep_cols]
+
+    # Sort by a key stat depending on position
+    if pos == "QB" and "passing_yards" in season_totals.columns:
+        season_totals = season_totals.sort_values("passing_yards", ascending=False)
+    elif pos == "RB" and "rushing_yards" in season_totals.columns:
+        season_totals = season_totals.sort_values("rushing_yards", ascending=False)
+    elif pos in ("WR", "TE") and "receiving_yards" in season_totals.columns:
+        season_totals = season_totals.sort_values("receiving_yards", ascending=False)
+
+    return season_totals
+
+#qb_2024_totals_top5 = get_season_totals_by_position(2024, "QB")
+#print(qb_2024_totals_top5.head())
+#qb_2024 = get_season_totals_by_position(2024, "QB")
+#print(qb_2024)
+
+def plot_position_stat_bar(year: int,
+                           position: str,
+                           stat_col: str,
+                           top_n: int = 20,
+                           save_path: str = None) -> None:
+    """
+    Plot a bar chart for a given stat column for all players at a position,
+    and optionally save it as a PNG file.
+
+    Args:
+        year (int): NFL season (e.g., 2024)
+        position (str): Position (e.g., 'QB', 'RB', 'WR', 'TE')
+        stat_col (str): Stat column to plot (e.g., 'passing_yards')
+        top_n (int): Show top N players (default 20)
+        save_path (str): Optional. File path to save PNG (e.g., 'qb_passing_2024.png')
+
+    Returns:
+        None
+    """
+    df = get_season_totals_by_position(year, position)
+
+    if stat_col not in df.columns:
+        raise ValueError(
+            f"Column '{stat_col}' not found. Available columns: {list(df.columns)}"
+        )
+
+    df_sorted = df.sort_values(stat_col, ascending=False).head(top_n)
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(df_sorted["player_display_name"], df_sorted[stat_col])
+
+    pretty_stat = stat_col.replace("_", " ").title()
+    plt.title(f"Top {top_n} {position.upper()} by {pretty_stat} in {year}")
+    plt.xlabel("Player")
+    plt.ylabel(pretty_stat)
+    plt.xticks(rotation=45, ha="right")
+
+    plt.tight_layout()
+
+    # --- 🔥 Save chart if save_path is given ---
+    if save_path:
+        plt.savefig(save_path, dpi=300)  # dpi=300 gives high quality images
+        print(f"Chart saved as: {save_path}")
+
+    plt.show()
+
+# plot_position_stat_bar(2024, "QB", "passing_yards", save_path="qb_passing_2024.png", top_n=20)
+# plot_position_stat_bar(2024, "RB", "rushing_yards", save_path="rb_rushing_2024.png", top_n=20)
+
+def get_player_stats(year: int, first_name: str, last_name: str) -> pd.DataFrame:
+    """
+    Get all weekly stats for a single NFL player for a given season.
+    Requires exact match on first and last name.
+
+    Args:
+        year (int): NFL season year (e.g., 2024)
+        first_name (str): Player's first name (e.g., "Jalen")
+        last_name (str): Player's last name (e.g., "Hurts")
+
+    Returns:
+        pandas.DataFrame: All weekly stats for that player in that season.
+    """
+
+    # Load weekly data for the season
+    weekly = nfl.import_weekly_data([year])
+
+    # Normalize inputs
+    first = first_name.lower().strip()
+    last = last_name.lower().strip()
+
+    # Normalize player names in the dataset
+    weekly["first"] = weekly["player_display_name"].str.split().str[0].str.lower()
+    weekly["last"] = weekly["player_display_name"].str.split().str[-1].str.lower()
+
+    # Exact match on first + last
+    player_df = weekly[(weekly["first"] == first) & (weekly["last"] == last)].copy()
+
+    if player_df.empty:
+        raise ValueError(
+            f"No data found for player '{first_name} {last_name}' in season {year}."
+        )
+
+    # Sort by week for clean output
+    player_df = player_df.sort_values("week")
+
+    # Remove temporary helper columns
+    player_df = player_df.drop(columns=["first", "last"], errors="ignore")
+
+    return player_df
+
+# playerData= get_player_stats(2024, 'Lamar','Jackson')
+# print(playerData)
+
+def dataframe_to_png(df, png_path="dataframe.png", fontsize=10, col_width=2.0):
+    """
+    Save a pandas DataFrame as a PNG image using Matplotlib.
+
+    Args:
+        df (pd.DataFrame): The DataFrame to export
+        png_path (str): File path to save the PNG
+        fontsize (int): Font size in the table
+        col_width (float): Width of each column in the image
+
+    Returns:
+        None (saves PNG file)
+    """
+
+    # Calculate figure size based on rows and columns
+    n_rows, n_cols = df.shape
+    figsize = (col_width * n_cols, 0.4 * n_rows)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis("off")  # hide axes
+
+    # Create table
+    table = ax.table(
+        cellText=df.values,
+        colLabels=df.columns,
+        loc="center",
+        cellLoc="center",
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(fontsize)
+    table.scale(1, 1.5)  # increase row height
+
+    # Save image
+    plt.savefig(png_path, bbox_inches="tight", dpi=300)
+    plt.close()
+
+    print(f"DataFrame saved as PNG: {png_path}")
+
+# qb_totals = get_season_totals_by_position(2024, "QB")
+
+# dataframe_to_png(qb_totals, "qb_totals_2024.png")
+
+def export_player_season_png(
+    year: int,
+    first_name: str,
+    last_name: str,
+    png_path: str | None = None,
+    columns: list[str] | None = None,
+    fontsize: int = 10,
+) -> str:
+    """
+    Get a player's weekly stats for a season and export them as a PNG table.
+
+    Args:
+        year (int): NFL season (e.g., 2024)
+        first_name (str): Player's first name (e.g., "Jalen")
+        last_name (str): Player's last name (e.g., "Hurts")
+        png_path (str | None): Optional file path for the PNG.
+                               If None, a name is generated automatically.
+        columns (list[str] | None): Optional list of columns to include.
+                                    If None, all columns are used.
+        fontsize (int): Font size for the table text.
+
+    Returns:
+        str: The path to the saved PNG file.
+    """
+
+    # 1. Get the player's DataFrame (one row per week)
+    df = get_player_stats(year, first_name, last_name)
+
+    # 2. Keep only selected columns if provided
+    if columns is not None:
+        # Only keep columns that exist in df
+        cols_to_use = [c for c in columns if c in df.columns]
+        if not cols_to_use:
+            raise ValueError("None of the specified columns exist in the DataFrame.")
+        df = df[cols_to_use]
+
+    # 3. Auto-generate a file name if not provided
+    if png_path is None:
+        safe_first = first_name.lower().replace(" ", "_")
+        safe_last = last_name.lower().replace(" ", "_")
+        png_path = f"{safe_first}_{safe_last}_{year}_stats.png"
+
+    # 4. Build the table figure
+    n_rows, n_cols = df.shape
+    # Reasonable sizing for a single player season (usually <= 18 games)
+    figsize = (max(8, n_cols * 1.2), max(2, n_rows * 0.6))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=df.values,
+        colLabels=df.columns,
+        loc="center",
+        cellLoc="center",
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(fontsize)
+    table.scale(1, 1.4)  # increase row height a bit
+
+    # 5. Add a title
+    full_name = f"{first_name} {last_name}"
+    ax.set_title(f"{full_name} – {year} Season Stats (Weekly)", pad=20)
+
+    # 6. Save as PNG
+    plt.savefig(png_path, bbox_inches="tight", dpi=300)
+    plt.close(fig)
+
+    print(f"Saved player stats table as: {png_path}")
+    return png_path
+
+# export_player_season_png(2024, "Jalen", "Hurts")
+
+def plot_player_stat_by_week(
+    year: int,
+    first_name: str,
+    last_name: str,
+    stat_col: str,
+    save_path: str | None = None
+) -> None:
+    """
+    Plot a line graph for a specific player's stat by week for a given season.
+
+    Args:
+        year (int): NFL season year (e.g., 2024)
+        first_name (str): Player's first name (e.g., "Jalen")
+        last_name (str): Player's last name (e.g., "Hurts")
+        stat_col (str): Column name of the stat to plot
+                        (e.g., "passing_yards", "rushing_yards", "receiving_yards")
+        save_path (str | None): Optional path to save the plot as a PNG.
+                                If None, the plot is just shown.
+
+    Returns:
+        None
+    """
+
+    # Get the player's weekly stats DataFrame (using the helper we wrote earlier)
+    df = get_player_stats(year, first_name, last_name)
+
+    # Make sure the stat column exists
+    if stat_col not in df.columns:
+        raise ValueError(
+            f"Column '{stat_col}' not found in player data. "
+            f"Available columns include: {list(df.columns)}"
+        )
+
+    # Ensure data is sorted by week
+    if "week" not in df.columns:
+        raise ValueError("Column 'week' not found in player data.")
+    df = df.sort_values("week")
+
+    # Convert the stat column to numeric (just in case) and fill NaN with 0
+    df[stat_col] = pd.to_numeric(df[stat_col], errors="coerce").fillna(0)
+
+    weeks = df["week"]
+    values = df[stat_col]
+
+    # Create the line plot
+    plt.figure(figsize=(10, 5))
+    plt.plot(weeks, values, marker="o")
+
+    # Labels and title
+    pretty_stat = stat_col.replace("_", " ").title()
+    full_name = f"{first_name} {last_name}"
+
+    plt.title(f"{full_name} – {pretty_stat} by Week ({year} Season)")
+    plt.xlabel("Week")
+    plt.ylabel(pretty_stat)
+    plt.xticks(weeks)  # show actual week numbers on x-axis
+    plt.grid(True, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+
+    # Optionally save as PNG
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Saved line chart as: {save_path}")
+
+    # Show the plot
+    plt.show()
+
+# plot_player_stat_by_week(
+#    2004,
+#    "Brian",
+#    "Westbrook",
+#    "rushing_yards",
+#    save_path="brian_westbrook_2004_rushing_yards_by_week.png"
+# ) 
+
+def get_team_season_data(year: int, include_team_meta: bool = True) -> pd.DataFrame:
+    """
+    Get clean team-level season stats for all teams for a given NFL season.
+    
+    Removes ALL metadata fields related to:
+        - logos
+        - colors
+        - wordmarks
+        - nicknames
+        - divisions
+
+    Adds:
+        - points_for
+        - points_against
+        - point_diff
+        - ppg_for
+        - ppg_against
+
+    Compatible with nfl_data_py 0.3.3.
+    """
+
+    # 1. Load schedule data
     games = nfl.import_schedules([year])
 
     if "season_type" in games.columns:
         games = games[games["season_type"] == "REG"]
-    else:
-        games = games[games["game_type"] == "REG"]
 
     games = games.dropna(subset=["home_score", "away_score"])
 
+    # 2. Build home and away rows
     home = games[["home_team", "home_score", "away_score"]].rename(
         columns={"home_team": "team", "home_score": "points_for", "away_score": "points_against"}
     )
-    home["win"] = (home["points_for"] > home["points_against"]).astype(int)
-
     away = games[["away_team", "away_score", "home_score"]].rename(
         columns={"away_team": "team", "away_score": "points_for", "home_score": "points_against"}
     )
-    away["win"] = (away["points_for"] > away["points_against"]).astype(int)
 
-    all_games = pd.concat([home, away])
+    # Outcomes
+    for df in (home, away):
+        df["win"] = (df["points_for"] > df["points_against"]).astype(int)
+        df["loss"] = (df["points_for"] < df["points_against"]).astype(int)
+        df["tie"]  = (df["points_for"] == df["points_against"]).astype(int)
 
-    records = all_games.groupby("team").agg(
+    # Combine
+    team_games = pd.concat([home, away], ignore_index=True)
+
+    # 3. Aggregate season totals
+    team_stats = team_games.groupby("team").agg(
+        games_played=("win", "size"),
         wins=("win", "sum"),
-        losses=("win", lambda x: len(x) - x.sum()),
+        losses=("loss", "sum"),
+        ties=("tie", "sum"),
         points_for=("points_for", "sum"),
         points_against=("points_against", "sum")
     ).reset_index()
 
-    records = records.sort_values("wins", ascending=False).reset_index(drop=True)
+    # Derived stats
+    team_stats["point_diff"] = team_stats["points_for"] - team_stats["points_against"]
+    team_stats["ppg_for"] = team_stats["points_for"] / team_stats["games_played"]
+    team_stats["ppg_against"] = team_stats["points_against"] / team_stats["games_played"]
 
-    return records
+    # 4. Optional metadata merge + cleaning
+    if include_team_meta:
+        try:
+            meta = nfl.import_team_desc()
 
-def get_season_Results_By_team(year, team):
-    schedules = nfl.import_schedules([year])
+            # Merge on appropriate key
+            if "team" in meta.columns:
+                team_stats = team_stats.merge(meta, on="team", how="left")
+            elif "team_abbr" in meta.columns:
+                team_stats = team_stats.merge(meta, left_on="team", right_on="team_abbr", how="left")
 
-    if "season_type" in schedules.columns:
-        schedules = schedules[schedules["season_type"] == "REG"]
-    else:
-        schedules = schedules[schedules["game_type"] == "REG"]
+            # Fields to remove
+            remove_cols = [
+                c for c in team_stats.columns
+                if any(keyword in c.lower() for keyword in [
+                    "logo", "wordmark", "color", "nick", "division"
+                ])
+            ]
 
-    team_games = schedules[
-        (schedules["home_team"] == team) | (schedules["away_team"] == team)
-    ].copy()
+            team_stats = team_stats.drop(columns=remove_cols, errors="ignore")
 
-    def get_result(row):
-        if row["home_team"] == team:
-            return "W" if row["home_score"] > row["away_score"] else "L"
-        else:
-            return "W" if row["away_score"] > row["home_score"] else "L"
+        except Exception:
+            pass
 
-    team_games["result"] = team_games.apply(get_result, axis=1)
-    team_games["points_for"] = team_games.apply(
-        lambda r: r["home_score"] if r["home_team"] == team else r["away_score"], axis=1
-    )
-    team_games["points_against"] = team_games.apply(
-        lambda r: r["away_score"] if r["home_team"] == team else r["home_score"], axis=1
-    )
+    # Add season
+    team_stats["season"] = year
 
-    return team_games[["week", "home_team", "away_team", "points_for", "points_against", "result"]]
+    # Reorder
+    cols = [
+        "season", "team",
+        "games_played", "wins", "losses", "ties",
+        "points_for", "points_against", "point_diff",
+        "ppg_for", "ppg_against"
+    ]
+    other_cols = [c for c in team_stats.columns if c not in cols]
 
-def weeklyPlayerStats(year, position, week=None):
+    return team_stats[cols + other_cols]
+
+
+#df = get_team_season_data(2024)
+#print(df.head)
+
+def get_all_team_game_stats(year: int) -> pd.DataFrame:
     """
-    Get season or single-week stats by player for a position.
+    Return game-by-game stats for every team in a given NFL season.
+    One row per *team-game* (so each actual game appears twice: once per team).
 
-    Args:
-        year (int): NFL season (e.g., 2024)
-        position (str): 'QB', 'RB', 'FB', 'WR', 'TE', etc.
-        week (int|list[int]|None): specific week or list of weeks; None = all weeks
-
-    Returns:
-        pandas.DataFrame: aggregated stats sorted by the primary yardage stat for that position
-    """
-    weekly = nfl.import_weekly_data([year])
-
-    # --- normalize inputs ---
-    pos = str(position).upper()
-
-    # --- optional week filter ---
-    if week is not None:
-        if isinstance(week, (list, tuple, set)):
-            weekly = weekly[weekly["week"].isin(list(week))]
-        else:
-            weekly = weekly[weekly["week"] == int(week)]
-
-    # --- filter by position (handle NaN) ---
-    filtered = weekly[weekly["position"].fillna("").str.upper() == pos].copy()
-
-    # --- choose team column (keep your output as 'recent_team') ---
-    team_col = "recent_team" if "recent_team" in filtered.columns else ("team" if "team" in filtered.columns else None)
-    if team_col is None:
-        team_col = "recent_team"
-        filtered[team_col] = pd.NA
-
-    # --- alias map: pick whatever exists in the data safely ---
-    aliases = {
-        "pass_yards":      ["passing_yards", "pass_yards"],
-        "pass_tds":        ["passing_tds", "pass_tds", "pass_td"],
-        "pass_att":        ["pass_attempts", "passing_attempts", "attempts"],
-        "pass_cmp":        ["completions", "pass_completions", "passing_completions"],
-        "interceptions":   ["interceptions", "pass_interceptions", "int"],
-        "rush_yards":      ["rushing_yards", "rush_yards"],
-        "rush_tds":        ["rushing_tds", "rush_tds"],
-        "rush_att":        ["rushing_attempts", "rush_att", "carries"],
-        "rec_yards":       ["receiving_yards", "rec_yards"],
-        "rec_tds":         ["receiving_tds", "rec_tds"],
-        "receptions":      ["receptions", "rec"],
-        "targets":         ["targets", "tar"],
-        "fantasy_points":  ["fantasy_points", "fantasy_points_ppr", "fantasy_points_half_ppr"],
-    }
-
-    def ensure_col(df, key):
-        """Return the actual column name present for a logical key; create zeros if missing."""
-        for cand in aliases.get(key, [key]):
-            if cand in df.columns:
-                return cand
-        # create a zero column if truly missing
-        df[key] = 0
-        return key
-
-    # resolve the columns against the actual dataset
-    cols = {k: ensure_col(filtered, k) for k in aliases.keys()}
-
-    # --- pick metrics by position (kept simple, add both primary + common secondaries) ---
-    if pos == "QB":
-        agg_cols = [cols["pass_yards"], cols["pass_tds"], cols["pass_att"], cols["pass_cmp"],
-                    cols["interceptions"], cols["rush_yards"], cols["rush_tds"], cols["fantasy_points"]]
-        primary_sort = cols["pass_yards"]
-    elif pos in ("RB", "FB"):
-        agg_cols = [cols["rush_yards"], cols["rush_tds"], cols["rush_att"],
-                    cols["rec_yards"], cols["receptions"], cols["rec_tds"], cols["fantasy_points"]]
-        primary_sort = cols["rush_yards"]
-    elif pos in ("WR", "TE"):
-        agg_cols = [cols["rec_yards"], cols["receptions"], cols["rec_tds"],
-                    cols["rush_yards"], cols["rush_tds"], cols["fantasy_points"]]
-        primary_sort = cols["rec_yards"]
-    else:
-        # generic bundle
-        agg_cols = [cols["fantasy_points"], cols["rec_yards"], cols["receptions"],
-                    cols["rush_yards"], cols["rush_tds"], cols["pass_yards"]]
-        primary_sort = cols["fantasy_points"]
-
-    # make numeric & safe for sum
-    for c in set(agg_cols):
-        filtered[c] = pd.to_numeric(filtered[c], errors="coerce").fillna(0)
-
-    # --- aggregate ---
-    stats = (
-        filtered.groupby(["player_id", "player_name", team_col], dropna=False)[agg_cols]
-        .sum(min_count=1)
-        .reset_index()
-        .rename(columns={team_col: "recent_team"})
-        .sort_values(primary_sort, ascending=False)
-    )
-
-    # --- derived rates (added after aggregation so rates are season/week-aggregated) ---
-    # Completion %
-    if {cols["pass_att"], cols["pass_cmp"]}.issubset(stats.columns):
-        with pd.option_context('mode.use_inf_as_na', True):
-            stats["cmp_pct"] = (stats[cols["pass_cmp"]] / stats[cols["pass_att"]]).replace([pd.NA], 0) * 100
-
-    # Y/A
-    if {cols["pass_yards"], cols["pass_att"]}.issubset(stats.columns):
-        with pd.option_context('mode.use_inf_as_na', True):
-            stats["pass_ya"] = (stats[cols["pass_yards"]] / stats[cols["pass_att"]]).replace([pd.NA], 0)
-
-    # YPC
-    if {cols["rush_yards"], cols["rush_att"]}.issubset(stats.columns):
-        with pd.option_context('mode.use_inf_as_na', True):
-            stats["rush_ypc"] = (stats[cols["rush_yards"]] / stats[cols["rush_att"]]).replace([pd.NA], 0)
-
-    # YPR
-    if {cols["rec_yards"], cols["receptions"]}.issubset(stats.columns):
-        with pd.option_context('mode.use_inf_as_na', True):
-            stats["rec_ypr"] = (stats[cols["rec_yards"]] / stats[cols["receptions"]]).replace([pd.NA], 0)
-
-    # keep most relevant columns first
-    front_cols = ["player_id", "player_name", "recent_team"]
-    ordered = front_cols + [c for c in agg_cols if c in stats.columns] + [c for c in ["cmp_pct","pass_ya","rush_ypc","rec_ypr"] if c in stats.columns]
-    stats = stats[ordered]
-
-    return stats
-
-def _resolve_col(df: pd.DataFrame, col_name: str) -> str:
-    """Return the exact dataframe column matching col_name (case-insensitive)."""
-    lookup = {c.lower(): c for c in df.columns}
-    key = str(col_name).strip().lower()
-    if key in lookup:
-        return lookup[key]
-    # helpful error showing a few options
-    raise KeyError(
-        f"Column '{col_name}' not found. Available columns include: "
-        + ", ".join(list(df.columns)[:30])
-        + (" ..." if len(df.columns) > 30 else "")
-    )
-
-def plot_player_stat(
-    stats: pd.DataFrame,
-    stat: str,
-    top_n: int = 15,
-    title: str | None = None,
-    annotate: bool = True,
-    figsize=(10, 6),
-    save_path: str | None = None,
-):
-    """
-    Plot a horizontal bar chart from a weeklyPlayerStats dataframe for the chosen stat column.
-
-    Args:
-        stats (pd.DataFrame): output of weeklyPlayerStats(...)
-        stat (str): column name in `stats` to plot (case-insensitive)
-        top_n (int): number of players to show
-        title (str|None): optional chart title
-        annotate (bool): write values at the end of bars
-        figsize (tuple): figure size
-        save_path (str|None): if provided, save the figure to this path
-
-    Returns:
-        matplotlib.axes.Axes, pd.DataFrame (the data actually plotted)
-    """
-    # resolve column and coerce numeric
-    stat_col = _resolve_col(stats, stat)
-    df = stats.copy()
-
-    # Build a readable label "Player (TEAM)"
-    team_col = "recent_team" if "recent_team" in df.columns else None
-    if team_col is None:
-        # try common alternates, else blank
-        for cand in ("team", "posteam", "recent_team"):
-            if cand in df.columns:
-                team_col = cand
-                break
-    team_col = team_col or "recent_team"
-    if team_col not in df.columns:
-        df[team_col] = ""
-
-    df["label"] = (
-        df.get("player_name", pd.Series([""] * len(df))).fillna("")
-        + " ("
-        + df[team_col].fillna("")
-        + ")"
-    ).str.strip()
-
-    # numeric & drop missing
-    df[stat_col] = pd.to_numeric(df[stat_col], errors="coerce")
-    plot_df = df.dropna(subset=[stat_col]).sort_values(stat_col, ascending=False).head(top_n)
-
-    # Basic plot
-    fig, ax = plt.subplots(figsize=figsize)
-    ax.barh(plot_df["label"], plot_df[stat_col])
-    ax.invert_yaxis()  # highest at top
-
-    # Labels & title
-    ax.set_xlabel(stat_col)
-    ax.set_ylabel("Player")
-    if title is None:
-        title = f"Top {min(top_n, len(plot_df))} by {stat_col}"
-    ax.set_title(title)
-
-    # Annotations
-    if annotate:
-        is_pct = "pct" in stat_col.lower()  # e.g., cmp_pct
-        for i, v in enumerate(plot_df[stat_col].to_numpy()):
-            txt = f"{v:.1f}%" if is_pct else f"{v:.0f}" if float(v).is_integer() else f"{v:.2f}"
-            ax.text(v, i, f"  {txt}", va="center")
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches="tight")
-
-    return ax, plot_df
-
-def plot_weekly_player_stats(
-    year: int,
-    position: str,
-    stat: str,
-    week=None,
-    **plot_kwargs,
-):
-    """
-    Convenience wrapper: runs weeklyPlayerStats(year, position, week) then plots `stat`.
-    plot_kwargs are forwarded to plot_player_stat (top_n, title, annotate, figsize, save_path).
-    """
-    stats = weeklyPlayerStats(year, position, week=week)
-    return plot_player_stat(stats, stat=stat, **plot_kwargs)
-
-def get_position_columns(year: int = 2024, position: str = "QB") -> list[str]:
-    """
-    Return all available stat columns for a given position.
-
-    Args:
-        year (int): NFL season (default=2024)
-        position (str): Player position, e.g. "QB", "WR", "RB", "TE"
-
-    Returns:
-        list[str]: Sorted list of column names available for that position.
-    """
-    # Load weekly data
-    weekly = nfl.import_weekly_data([year])
-    
-    # Normalize position
-    pos = str(position).upper()
-    
-    # Filter by position (handle missing data)
-    filtered = weekly[weekly["position"].fillna("").str.upper() == pos]
-    
-    # If no data found for that position, warn and return all columns
-    if filtered.empty:
-        print(f"⚠️ No data found for position '{pos}' in {year}. Returning all columns.")
-        return sorted(list(weekly.columns))
-    
-    # Return sorted list of columns for that position
-    return sorted(list(filtered.columns))
-
-def get_player_stats_by_name(
-    year: int,
-    player_name: str,
-    position: str,
-    week: int | list[int] | None = None,
-    exact: bool = False,
-) -> pd.DataFrame:
-    """
-    Look up a single player's aggregated stats for a given year (and optional week[s]),
-    using the existing weeklyPlayerStats helper.
-
-    Args:
-        year (int): NFL season (e.g., 2024)
-        player_name (str): Name or partial name of the player, e.g. "Jalen Hurts"
-        position (str): Player position (e.g., "QB", "RB", "WR", "TE")
-        week (int|list[int]|None): Single week, list of weeks, or None for full season
-        exact (bool): 
-            - True  -> match full name exactly (case-insensitive)
-            - False -> substring / partial match (case-insensitive)
-
-    Returns:
-        pandas.DataFrame: Filtered stats for the matching player(s).
-                         Same columns/structure as weeklyPlayerStats output.
-
-    Raises:
-        ValueError: If no players match the given name.
-    """
-    # reuse your existing logic to get aggregated stats by player
-    stats = weeklyPlayerStats(year, position, week=week)
-
-    # normalize search
-    name_query = player_name.strip().lower()
-
-    if exact:
-        mask = stats["player_name"].str.lower() == name_query
-    else:
-        mask = stats["player_name"].str.contains(name_query, case=False, na=False)
-
-    result = stats[mask].copy()
-
-    if result.empty:
-        raise ValueError(
-            f"No players found matching name '{player_name}' "
-            f"for year {year} and position {position}."
-        )
-
-    # Optional: keep the same ordering weeklyPlayerStats already has
-    # or sort by fantasy_points if present:
-    if "fantasy_points" in result.columns:
-        result = result.sort_values("fantasy_points", ascending=False)
-
-    return result
-
-def get_advanced_team_records(year: int, return_game_level: bool = False
-    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame]]:
-    """
-    Get team records plus advanced team performance stats (offense + defense).
-
-    Args:
-        year (int): NFL season (e.g., 2024)
-        return_game_level (bool): 
-            False  -> return only team summary records (default, backwards compatible)
-            True   -> return (team_records, team_game_stats) where team_game_stats is
-                      per-team-per-game with metadata and advanced stats.
-
-    Returns:
-        pandas.DataFrame OR (pandas.DataFrame, pandas.DataFrame):
-            - records: one row per team with wins, losses, PF/PA, point diff, etc.
-            - team_games (optional): one row per team-game with meta + advanced stats
+    Columns include:
+        - season, week, game_id, gameday
+        - team, opponent, is_home
+        - points_for, points_against, point_diff
+        - result ('W', 'L', 'T')
+    Compatible with nfl_data_py 0.3.3.
     """
 
-    # -------------------------
-    # 1. Load schedule / games
-    # -------------------------
+    # 1. Load schedule data
     games = nfl.import_schedules([year])
 
-    # Regular season filter (handles schema differences)
+    # Filter to regular season if column exists
     if "season_type" in games.columns:
         games = games[games["season_type"] == "REG"]
-    else:
-        games = games[games["game_type"] == "REG"]
 
-    # Completed games only
+    # Drop games without final scores
     games = games.dropna(subset=["home_score", "away_score"])
 
-    # Basic W/L flags at game level
-    games["home_win"] = (games["home_score"] > games["away_score"]).astype(int)
-    games["away_win"] = (games["away_score"] > games["home_score"]).astype(int)
+    # 2. Build home team rows
+    home = games.copy()
+    home["team"] = home["home_team"]
+    home["opponent"] = home["away_team"]
+    home["is_home"] = True
+    home["points_for"] = home["home_score"]
+    home["points_against"] = home["away_score"]
 
-    # -------------------------
-    # 2. Game metadata subset
-    # -------------------------
-    meta_cols = [
-        "game_id", "week", "gameday", "weekday", "gametime",
-        "stadium", "roof", "surface", "temp", "wind",
-        "spread_line", "total_line",
-        "home_team", "away_team", "home_score", "away_score"
+    # 3. Build away team rows
+    away = games.copy()
+    away["team"] = away["away_team"]
+    away["opponent"] = away["home_team"]
+    away["is_home"] = False
+    away["points_for"] = away["away_score"]
+    away["points_against"] = away["home_score"]
+
+    # 4. Combine into team-game logs
+    team_games = pd.concat([home, away], ignore_index=True)
+
+    # 5. Derived stats
+    team_games["point_diff"] = team_games["points_for"] - team_games["points_against"]
+    team_games["result"] = np.where(
+        team_games["points_for"] > team_games["points_against"], "W",
+        np.where(team_games["points_for"] < team_games["points_against"], "L", "T")
+    )
+
+    # 6. Keep / rename main columns (and keep extras if present)
+    base_cols = [
+        "season" if "season" in team_games.columns else None,
+        "week" if "week" in team_games.columns else None,
+        "gameday" if "gameday" in team_games.columns else None,
+        "game_id" if "game_id" in team_games.columns else None,
+        "team", "opponent", "is_home",
+        "points_for", "points_against", "point_diff", "result",
     ]
-    existing_meta_cols = [c for c in meta_cols if c in games.columns]
-    games_meta = games[existing_meta_cols].copy()
+    base_cols = [c for c in base_cols if c is not None]
 
-    # --------------------------------------------
-    # 3. Build per-team-per-game basic stat table
-    # --------------------------------------------
-    # Home rows
-    home = pd.DataFrame({
-        "game_id": games["game_id"],
-        "week": games["week"],
-        "team": games["home_team"],
-        "opponent": games["away_team"],
-        "points_for": games["home_score"],
-        "points_against": games["away_score"],
-        "win": games["home_win"],
-        "location": "home"
-    })
+    # Put base columns first, then everything else
+    other_cols = [c for c in team_games.columns if c not in base_cols]
+    team_games = team_games[base_cols + other_cols]
 
-    # Away rows
-    away = pd.DataFrame({
-        "game_id": games["game_id"],
-        "week": games["week"],
-        "team": games["away_team"],
-        "opponent": games["home_team"],
-        "points_for": games["away_score"],
-        "points_against": games["home_score"],
-        "win": games["away_win"],
-        "location": "away"
-    })
+    # Sort by team + week if week exists
+    if "week" in team_games.columns:
+        team_games = team_games.sort_values(["team", "week"]).reset_index(drop=True)
 
-    team_games_basic = pd.concat([home, away], ignore_index=True)
+    return team_games
 
-    # --------------------------------------
-    # 4. Load play-by-play & build advanced
-    # --------------------------------------
-    pbp_cols = [
-        "play_id",
-        "game_id",
-        "posteam",      # offensive team
-        "defteam",      # defensive team
-        "yards_gained",
-        "rush_attempt",
-        "pass_attempt",
-        "passing_yards",
-        "rushing_yards",
-        "epa",
-        "success",
-        "interception",
-        "fumble_lost",
-        "touchdown"
-    ]
-
-    pbp = nfl.import_pbp_data([year], columns=pbp_cols)
-
-    # Keep only offensive plays that have a posteam
-    pbp = pbp[~pbp["posteam"].isna()].copy()
-
-    # ---- OFFENSIVE STATS (by posteam) ----
-    team_game_off = (
-        pbp.groupby(["game_id", "posteam"])
-           .agg(
-               plays=("play_id", "count"),
-               total_yards=("yards_gained", "sum"),
-               passing_yards=("passing_yards", "sum"),
-               rushing_yards=("rushing_yards", "sum"),
-               rush_attempts=("rush_attempt", "sum"),
-               pass_attempts=("pass_attempt", "sum"),
-               total_epa=("epa", "sum"),
-               avg_epa=("epa", "mean"),
-               success_rate=("success", "mean"),
-               interceptions=("interception", "sum"),
-               fumbles_lost=("fumble_lost", "sum"),
-               touchdowns=("touchdown", "sum"),
-           )
-           .reset_index()
-    )
-    team_game_off["turnovers"] = (
-        team_game_off["interceptions"] + team_game_off["fumbles_lost"]
-    )
-
-    # ---- DEFENSIVE STATS (by defteam = yards allowed, etc.) ----
-    team_game_def = (
-        pbp.groupby(["game_id", "defteam"])
-           .agg(
-               def_plays=("play_id", "count"),
-               def_yards_allowed=("yards_gained", "sum"),
-               def_passing_yards_allowed=("passing_yards", "sum"),
-               def_rushing_yards_allowed=("rushing_yards", "sum"),
-               def_rush_attempts_faced=("rush_attempt", "sum"),
-               def_pass_attempts_faced=("pass_attempt", "sum"),
-               def_total_epa_allowed=("epa", "sum"),
-               def_avg_epa_allowed=("epa", "mean"),
-               def_success_rate_allowed=("success", "mean"),
-               # From the defense's POV, these are TAKEAWAYS
-               def_interceptions=("interception", "sum"),
-               def_fumbles_forced=("fumble_lost", "sum"),
-               def_touchdowns_allowed=("touchdown", "sum"),
-           )
-           .reset_index()
-    )
-    team_game_def["def_takeaways"] = (
-        team_game_def["def_interceptions"] + team_game_def["def_fumbles_forced"]
-    )
-
-    # -----------------------------------------
-    # 5. Merge basic team-games with advanced
-    # -----------------------------------------
-    # Merge offensive stats
-    team_games = team_games_basic.merge(
-        team_game_off,
-        left_on=["game_id", "team"],
-        right_on=["game_id", "posteam"],
-        how="left"
-    ).drop(columns=["posteam"])
-
-    # Merge defensive stats (same row = same team, now as defteam)
-    team_games = team_games.merge(
-        team_game_def,
-        left_on=["game_id", "team"],
-        right_on=["game_id", "defteam"],
-        how="left"
-    ).drop(columns=["defteam"])
-
-    # Add game metadata (stadium, roof, temp, spread, etc.)
-    team_games = team_games.merge(
-        games_meta,
-        on="game_id",
-        how="left",
-        suffixes=("", "_meta")
-    )
-
-    # -----------------------------------------
-    # 6. Aggregate to team-level records
-    # -----------------------------------------
-    records = (
-        team_games.groupby("team")
-        .agg(
-            games_played=("win", "count"),
-            wins=("win", "sum"),
-            losses=("win", lambda x: len(x) - x.sum()),
-            points_for=("points_for", "sum"),
-            points_against=("points_against", "sum"),
-            point_diff=("points_for", lambda x: x.sum())  # temp placeholder
-        )
-        .reset_index()
-    )
-
-    # Fix point differential & add win%
-    records["point_diff"] = records["points_for"] - records["points_against"]
-    records["win_pct"] = records["wins"] / records["games_played"]
-
-    # ---- OFFENSIVE TEAM-LEVEL AGGREGATES ----
-    advanced_off_agg = (
-        team_games.groupby("team")
-        .agg(
-            total_yards=("total_yards", "sum"),
-            passing_yards=("passing_yards", "sum"),
-            rushing_yards=("rushing_yards", "sum"),
-            plays=("plays", "sum"),
-            total_epa=("total_epa", "sum"),
-            avg_epa=("avg_epa", "mean"),
-            success_rate=("success_rate", "mean"),
-            turnovers=("turnovers", "sum"),
-        )
-        .reset_index()
-    )
-
-    # ---- DEFENSIVE TEAM-LEVEL AGGREGATES ----
-    advanced_def_agg = (
-        team_games.groupby("team")
-        .agg(
-            def_plays=("def_plays", "sum"),
-            def_yards_allowed=("def_yards_allowed", "sum"),
-            def_passing_yards_allowed=("def_passing_yards_allowed", "sum"),
-            def_rushing_yards_allowed=("def_rushing_yards_allowed", "sum"),
-            def_total_epa_allowed=("def_total_epa_allowed", "sum"),
-            def_avg_epa_allowed=("def_avg_epa_allowed", "mean"),
-            def_success_rate_allowed=("def_success_rate_allowed", "mean"),
-            def_touchdowns_allowed=("def_touchdowns_allowed", "sum"),
-            def_takeaways=("def_takeaways", "sum"),
-        )
-        .reset_index()
-    )
-
-    # Merge offensive + defensive advanced stats into records
-    records = (
-        records
-        .merge(advanced_off_agg, on="team", how="left")
-        .merge(advanced_def_agg, on="team", how="left")
-    )
-
-    # Sort standings
-    records = records.sort_values(
-        ["wins", "point_diff"], ascending=[False, False]
-    ).reset_index(drop=True)
-
-    if return_game_level:
-        # records: one row per team
-        # team_games: one row per team per game with meta + advanced stats
-        return records, team_games
-
-    return records
-
-# visualize into graph
-def compare_two_teams_points(team_games, team_a, team_b):
-    data_a = team_games[team_games["team"] == team_a].sort_values("week")
-    data_b = team_games[team_games["team"] == team_b].sort_values("week")
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(data_a["week"], data_a["points_for"], marker="o", label=team_a)
-    plt.plot(data_b["week"], data_b["points_for"], marker="o", label=team_b)
-
-    plt.title(f"{team_a} vs {team_b} – Points by Week")
-    plt.xlabel("Week")
-    plt.ylabel("Points Scored")
-    plt.xticks(sorted(team_games["week"].unique()))
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_team_points_by_week(team_games, team):
-    data = team_games[team_games["team"] == team].sort_values("week")
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(data["week"], data["points_for"], marker="o")
-    plt.title(f"{team} Points For by Week")
-    plt.xlabel("Week")
-    plt.ylabel("Points Scored")
-    plt.xticks(data["week"])
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.tight_layout()
-    plt.show()
-
-def plot_point_diff_vs_win_pct(records):
-    plt.figure(figsize=(10, 6))
-    plt.scatter(records["point_diff"], records["win_pct"])
-
-    for _, row in records.iterrows():
-        plt.text(row["point_diff"], row["win_pct"], row["team"],
-                 fontsize=8, ha="center", va="bottom")
-
-    plt.title("Point Differential vs Win Percentage")
-    plt.xlabel("Point Differential (Points For - Points Against)")
-    plt.ylabel("Win Percentage")
-    plt.axvline(0, linestyle="--")
-    plt.tight_layout()
-    plt.show()
-    year: int,
-    position: str,
-    stat: str,
-    week=None,
-    **plot_kwargs,
-):
+def get_team_game_stats(year: int, team: str) -> pd.DataFrame:
     """
-    Convenience wrapper: runs weeklyPlayerStats(year, position, week) then plots `stat`.
-    plot_kwargs are forwarded to plot_player_stat (top_n, title, annotate, figsize, save_path).
+    Get game-by-game stats for a single team in a given season.
+
+    Args:
+        year (int): NFL season (e.g., 2024)
+        team (str): Team abbreviation, e.g. 'PHI', 'DAL', 'KC'
+
+    Returns:
+        pandas.DataFrame: one row per game for that team.
     """
-    stats = weeklyPlayerStats(year, position, week=week)
-    return plot_player_stat(stats, stat=stat, **plot_kwargs)
+    team = team.upper()
+    all_games = get_all_team_game_stats(year)
+    return all_games[all_games["team"] == team].reset_index(drop=True)
+
+phi_2024 = get_team_game_stats(2024, "PHI")
+print(phi_2024[["week", "team", "opponent", "is_home", "points_for", "points_against", "result"]])
+
+
+def get_team_touchdown_stats(year: int) -> pd.DataFrame:
+    """
+    Build touchdown stats for each team using play-by-play data.
+    Compatible with nfl_data_py 0.3.3.
+    """
+
+    pbp = nfl.import_pbp_data([year])
+
+    # Determine scoring team (posteam for offensive TDs, defteam for defensive TDs)
+    pbp["team"] = pbp["posteam"].fillna(pbp["defteam"])
+
+    # Create TD type indicators
+    pbp["rush_td"] = pbp.get("rush_touchdown", 0)
+    pbp["pass_td"] = pbp.get("pass_touchdown", 0)
+
+    # Defensive TD (fumble return, interception return)
+    pbp["def_td"] = pbp.get("defensive_touchdown", 0)
+
+    # Special teams TD (punt return, kickoff return, blocked FG return)
+    pbp["special_td"] = pbp.get("special_teams_touchdown", 0)
+
+    # Total touchdowns
+    pbp["total_td"] = (
+        pbp["rush_td"] +
+        pbp["pass_td"] +
+        pbp["def_td"] +
+        pbp["special_td"]
+    )
+
+    # Group by team
+    td_stats = pbp.groupby("team").agg(
+        total_td=("total_td", "sum"),
+        rush_td=("rush_td", "sum"),
+        pass_td=("pass_td", "sum"),
+        def_td=("def_td", "sum"),
+        special_td=("special_td", "sum"),
+    ).reset_index()
+
+    return td_stats
+
+def get_team_season_with_tds(year: int) -> pd.DataFrame:
+    base_df = get_team_season_data(year)
+    td_df = get_team_touchdown_stats(year)
+
+    merged = base_df.merge(td_df, on="team", how="left")
+
+    td_cols = ["total_td", "rush_td", "pass_td", "def_td", "special_td"]
+    for col in td_cols:
+        merged[col] = merged[col].fillna(0).astype(int)
+
+    return merged
+
+
+def plot_team_stat_bar(year: int, stat_col: str):
+    df = get_team_season_with_tds(year)
+
+    if stat_col not in df.columns:
+        raise ValueError(f"Column '{stat_col}' not found. "
+                         "Did you mean one of: points_for, rush_td, pass_td, total_td?")
+    
+    df = df.sort_values(stat_col, ascending=False)
+
+    teams = df["team"]
+    values = df[stat_col]
+
+    plt.figure(figsize=(12, 6))
+    plt.bar(teams, values)
+    plt.title(f"{year} - Team Comparison by {stat_col.replace('_',' ').title()}")
+    plt.xticks(rotation=45)
+    plt.xlabel("Team")
+    plt.ylabel(stat_col.replace("_"," ").title())
+    plt.tight_layout()
+    plt.show()
+
+# plot_team_stat_bar(2024, "total_td")
+
+# plot_team_stat_bar(2024, "total_td")
+# plot_team_stat_bar(2022, "rush_td")
